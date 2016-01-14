@@ -1,0 +1,172 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Florian Ulmar"
+date: "14. Januar 2016"
+output: html_document
+---
+
+```{r warning = F, message = F, echo = F}
+
+## Global Settings
+
+library("knitr")
+opts_chunk$set(warning = F, message = F, echo = T)
+
+```
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify **how well** they do it.
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.
+
+# Getting and cleaning the data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: 
+
+http://groupware.les.inf.puc-rio.br/har.
+
+We first download the data and convert empty values into NAs.
+
+```{r}
+
+# downloading files from url
+pml_training_file <- './pml-training.csv' # Data for for training and cross validation
+pml_testing_file <- './pml-testing.csv' # Data for testcases
+pml_training_url <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+pml_testing_url <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+# download.file(pml_training_url, pml_training_file)
+# download.file(pml_testing_url, pml_testing_file)
+
+pml <- read.csv(file = pml_training_file, header = T, na.strings = c("NA", "" ,"#DIV/0!"))
+dim(pml)
+
+```
+
+For the further analysis it is important to remove columns with NAs. Additionally we remove factor-variables with different levels with regard to the test cases. We also remove some further variables which are not relevant for our model.
+
+```{r}
+pml <- subset(pml[, colSums(is.na(pml)) == 0],
+              select = -c(X, user_name, new_window, num_window, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+dim(pml)
+```
+
+# Data Analysis
+
+## Creating training and test data
+
+We first want to split our dataset into a training and a testing set.
+
+```{r}
+
+set.seed(333)
+library("caret")
+library("randomForest")
+library("rattle")
+
+inTrain <- createDataPartition(pml$classe, p = 0.7, list = F)
+training <- pml[inTrain,]
+testing <- pml[-inTrain,]
+dim(training); dim(testing)
+
+```
+
+## Predicting with trees
+
+As a first approach we want to model the training set by a decision tree. In this algorithm, the variables are splitted iteratively into groups and the homogenity is evaluated for each group.
+
+```{r}
+tm <- system.time(
+    model <- train(classe ~ ., method="rpart", data=training)
+)
+print(tm)
+
+print(model$finalModel)
+fancyRpartPlot(model$finalModel)
+
+## cross validation
+pred <- predict(model, newdata = testing)
+confMatrix <- confusionMatrix(testing$classe, pred)
+print(confMatrix$table)
+print(confMatrix$overall[1])
+```
+
+As we can see the accuracy of the model is very poor.
+
+### Random Forest model
+
+A much better approach is given by the Random Forest algorithm. This algorithm generates a lot of trees by bootstrapping samples of the data. At each split, the variables are also bootstrapped.
+
+```{r}
+
+tm <- system.time(
+    model <- randomForest(classe ~ ., data = training, ntree = 100, importance = FALSE)
+)
+print(tm)
+
+## the train function of the caret package is very time consuming
+# ctrl <- trainControl(allowParallel = T, method = "cv", number = 3)
+# model <- train(classe ~ ., data = training, model = "rf", trControl= ctrl)
+
+pred <- predict(model, newdata = testing)
+confMatrix <- confusionMatrix(testing$classe, pred)
+print(confMatrix$table)
+print(confMatrix$overall[1])
+```
+
+Simulations show that the train function of the caret-package is very time consuming. For that reason we take the *randomForest*-Function of the corresponding package. As we can see we get a much better accuracy as in the previous model.
+
+Even if take only the first 10 most important variables into account the results have nearly the same accuracy.
+
+```{r}
+# reduced model
+ord <- order(varImp(model), decreasing = T)
+small <- ord[1:10]
+trainSmall <- training[, c(small, dim(training)[2])]
+testSmall <- testing[, c(small, dim(testing)[2])]
+tm <- system.time(
+    modelSmall <- randomForest(classe ~ ., data = trainSmall, ntree = 100, importance = FALSE)
+)
+print(tm)
+pred <- predict(modelSmall, newdata = testSmall)
+confMatrixSmall <- confusionMatrix(testSmall$classe, pred)
+print(confMatrixSmall$table)
+print(confMatrixSmall$overall[1])
+```
+
+### Test Cases
+
+At last we want to predict the outcome for 20 test cases in the test data file. For this simulation we take the random forest models from the previous section.
+
+```{r}
+testCases <- read.csv(file = pml_testing_file, header = T, na.strings = c("NA", "" ,"#DIV/0!"))
+testCases <- subset(testCases[, colSums(is.na(testCases)) == 0], 
+                 select=-c(X, user_name, new_window, num_window, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+dim(testCases)
+
+pred <- predict(model, newdata = testCases)
+print(pred)
+
+predSmall <- predict(modelSmall, newdata = testCases)
+print(predSmall)
+
+```
+
+As we can see both models predict the same results.
+
+### Conclusions
+
+In this assignment, we used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The goal of the project was to predict the manner in which they did the exercise.
+
+Simulations with the a Random Forest model showed that the "classe" variable of the testing set can be predicted with an accuracy of  **`r round(print(confMatrix$overall[1]) * 100, 1)`** Percent. Even if we only take the 10 most important prediction variables (i.e. less than 20 Percent of all variables) the accuracy is still by **`r round(print(confMatrixSmall$overall[1]) * 100, 1)`**. This is a an excellent result.
+
